@@ -49,12 +49,12 @@ mongodb.then(mongo => {
     return res.send("Welcome to checkers backend");
   });
   
-  app.get('/activeGames', async (req, res) => {
+  app.get('/existingGames', async (req, res) => {
     try {
-      const activeGameIds = await Game.find({ private: false, $or: [{ whitePlayer: null }, { blackPlayer: null }] }).select('gameId').lean().then(results => {
+      const existingGameIds = await Game.find({ private: false, $or: [{ whitePlayer: null }, { blackPlayer: null }] }).select('gameId').lean().then(results => {
         return results.map(doc => doc.gameId);
       });
-      return res.status(200).send({ activeGameIds });
+      return res.status(200).send({ existingGameIds });
     } catch (e) {
       console.error('Unknown server error occurred', e);
       return res.status(500).send({ message: 'Unknown server error occurred' });
@@ -303,7 +303,11 @@ mongodb.then(mongo => {
 
   async function cleanupStaleGames() {
     const diff = (new Date()) - 180000;
+    const deletedGameIds = await Game.find({ updatedAt: { $lt: diff } }).select('gameId').lean().then(results => {
+      return results.map(doc => doc.gameId);
+    });
     await Game.deleteMany({ updatedAt: { $lt: diff } });
+    io.emit('games deleted', { deletedGameIds });
   }
   
   setInterval(cleanupStaleGames, 200000);
