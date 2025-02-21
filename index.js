@@ -238,6 +238,10 @@ mongodb.then(mongo => {
       if (!x || !y) {
         return res.status(401).send({ message: 'Must provide X and Y coordinates' });
       }
+
+      if (!game.whitePlayer || !game.blackPlayer) {
+        return res.status(401).send({ message: 'Cannot make a move. All players must be connected to the game.' });
+      }
   
       const playerToken = req.cookies[`typicalCheckersGameId${gameId}`];
       if (!playerToken) {
