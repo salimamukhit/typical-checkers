@@ -28,12 +28,12 @@ const Game = mongoose.model('Game', gameSchema);
 
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:3000",
+    origin: "http://192.168.0.228:3000",
     methods: ["GET", "POST"],
   },
 });
 
-app.use(cors({ origin: 'http://localhost:3000', credentials: true, }));
+app.use(cors({ origin: 'http://192.168.0.228:3000', methods: ["GET", "POST"], credentials: true, }));
 app.use(express.json());
 app.use(cookieParser());
 
@@ -196,6 +196,6 @@ mongodb.then(mongo => {
   });
 });
 
-server.listen(3001, () => {
+server.listen(3001, '0.0.0.0', () => {
   console.log('listening on *:3001');
 });
