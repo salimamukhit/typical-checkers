@@ -29,7 +29,7 @@ const gameSchema = new mongoose.Schema({
   activeCheckerPossibleMoves: Array,
   activeChecker: Object,
   winner: String,
-});
+}, { timestamps: true });
 
 const Game = mongoose.model('Game', gameSchema);
 
@@ -300,6 +300,13 @@ mongodb.then(mongo => {
       return res.status(500).send({ message: 'Unknown server error occurred' });
     }
   });
+
+  async function cleanupStaleGames() {
+    const diff = (new Date()) - 180000;
+    await Game.deleteMany({ updatedAt: { $lt: diff } });
+  }
+  
+  setInterval(cleanupStaleGames, 200000);
 });
 
 server.listen(3001, '0.0.0.0', () => {
