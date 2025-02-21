@@ -7,6 +7,13 @@ const cors = require('cors');
 const { Server } = require("socket.io");
 const { randomBytes } = require('crypto');
 const { initialBoard } = require('./initialBoard.js');
+const {
+  getMandatoryJumpCheckers,
+  updateGameBoardFromChanges,
+  isMandatoryJump,
+  getPossibleMoves,
+  determineWinner,
+} = require('./board.js');
 const mongoose = require('mongoose');
 const mongodb = mongoose.connect(process.env.MONGOOSE_URL);
 const cookieParser = require('cookie-parser');
@@ -44,12 +51,8 @@ mongodb.then(mongo => {
   
   app.get('/activeGames', async (req, res) => {
     try {
-      const games = await Game.find();
-      const activeGameIds = [];
-      games.forEach(game => {
-        if ((!game.whitePlayer || !game.blackPlayer) && !game.private) {
-          activeGameIds.push(game.gameId);
-        }
+      const activeGameIds = await Game.find({ private: false, $or: [{ whitePlayer: null }, { blackPlayer: null }] }).select('gameId').lean().then(results => {
+        return results.map(doc => doc.gameId);
       });
       return res.status(200).send({ activeGameIds });
     } catch (e) {
@@ -67,6 +70,7 @@ mongodb.then(mongo => {
         gameBoard: initialBoard,
         playerTurn: 'whitePlayer',
         private: Boolean(private),
+        winner: null,
       });
       // if the game is public we want to notify connected clients that it was created
       if (!private) {
@@ -78,6 +82,47 @@ mongodb.then(mongo => {
       return res.status(500).send({ message: 'Unknown server error occurred' });
     }
   });
+
+    // resets all the game properties and switches players
+    app.post('/game/reset', async (req, res) => {
+      const { gameId } = req.body;
+      try {
+        const game = (await Game.find({ gameId }))[0];
+        if (!game) {
+          return res.status(404).send({ message: 'Game with such id was not found' });
+        }
+
+        const gameIdCookie = req.cookies[`typicalCheckersGameId${gameId}`];
+        if (!gameIdCookie || (game.whitePlayer?.token !== gameIdCookie && game.blackPlayer?.token !== gameIdCookie)) {
+          return res.status(401).send({ message: 'You are not authorized to the reset this game' });
+        }
+
+        if (!game.winner) {
+          return res.status(401).send({ message: 'Game without a winner cannot be reset' });
+        }
+
+        game.set('gameBoard', initialBoard);
+        game.markModified('gameBoard');
+        game.set('playerTurn', 'whitePlayer');
+        game.set('mandatoryJumpMoves', []);
+        game.set('activeCheckerPossibleMoves', []);
+        game.set('activeChecker', null);
+        game.set('winner', null);
+
+        const temp = { username: game.whitePlayer.username, token: game.whitePlayer.token };
+        game.set('whitePlayer', { username: game.blackPlayer.username, token: game.blackPlayer.token });
+        game.set('blackPlayer', temp);
+        game.markModified('whitePlayer');
+        game.markModified('blackPlayer');
+        await game.save();
+        io.emit(`game board updated`, getGameProps(game));
+
+        return res.status(200).send({ ...getGameProps(game) });
+      } catch (e) {
+        console.error('Unknown server error occurred', e);
+        return res.status(500).send({ message: 'Unknown server error occurred' });
+      }
+    });
   
   function getGameProps(game) {
     return {
@@ -88,6 +133,7 @@ mongodb.then(mongo => {
       activeChecker: game.activeChecker,
       activeCheckerPossibleMoves: game.activeCheckerPossibleMoves,
       mandatoryJumpMoves: game.mandatoryJumpMoves,
+      winner: game.winner,
     };
   }
 
@@ -179,179 +225,6 @@ mongodb.then(mongo => {
     }
   });
 
-  function getClosestNumFromArr(target, numArr) {
-    let closestNum = numArr[0];
-    let smallestDiff = 10000;
-    for (const num of numArr) {
-      const diff = Math.abs(target - num);
-      if (diff < smallestDiff) {
-        smallestDiff = diff;
-        closestNum = num;
-      }
-    }
-
-    return closestNum;
-  }
-  
-  function updateGameBoardFromChanges(changes, gameBoard) {
-    const newGameBoard = {...gameBoard};
-    Object.entries(changes).forEach(entry => {
-      const y = Number(entry[0]);
-      Object.entries(entry[1]).forEach(value => {
-        const x = Number(value[0]);
-        const player = value[1];
-        newGameBoard[y][x] = player;
-      });
-    });
-    return newGameBoard;
-  }
-
-  function getCheckerStatus(newY, player) {
-    if (player === 'whitePlayer') {
-      if (newY === 1) {
-        return 'whitePlayerQueen';
-      }
-    } else if (player === 'blackPlayer') {
-      if (newY === 8) {
-        return 'blackPlayerQueen';
-      }
-    }
-
-    return player;
-  }
-
-  /**
-   * Gets the possible X coordinates where a checker can make its move
-   */
-  function getPossibleXs(x) {
-    if (x === 1) {
-      return [(x + 1)];
-    } else if (x === 8) {
-      return [(x - 1)];
-    }
-    return [(x - 1), (x + 1)];
-  }
-
-  /**
-   * Gets possible X coordinates where a checker can make its jump.
-   */
-  function getPossibleJumpXs(x) {
-    if (x < 3) {
-      return [(x + 2)];
-    } else if (x > 6) {
-      return [(x - 2)];
-    }
-    return [(x - 2), (x + 2)];
-  }
-
-  function isMandatoryJump(point, mandatoryJumpMoves) {
-    console.log(point, mandatoryJumpMoves);
-    const isMandatoryJump = mandatoryJumpMoves.find(pt => pt.x === point.x && pt.y === point.y);
-    return Boolean(isMandatoryJump);
-  }
-
-  function getMandatoryJumpCheckers(gameBoard, playerTurn) {
-    const checkerCoordinates = [];
-    Object.entries(gameBoard).forEach(entry => {
-      const y = Number(entry[0]);
-      const cells = entry[1];
-      Object.entries(cells).forEach(cellEntry => {
-        const x = Number(cellEntry[0]);
-        const player = cellEntry[1];
-        if (player && player.startsWith(playerTurn)) {
-          const jumpMoves = getPossibleMoves(gameBoard, x, y, true);
-          if (jumpMoves.length > 0) {
-            checkerCoordinates.push({ x, y });
-          }
-        }
-      })
-    });
-
-    return checkerCoordinates;
-  }
-
-  function getPossibleMoves(gameBoard, x, y, jumpsOnly) {
-    const player = gameBoard[y][x];
-    if (player === null) {
-      return [];    
-    }
-    const opposingPlayer = player.startsWith('whitePlayer') ? 'blackPlayer' : 'whitePlayer';
-    if (player === 'whitePlayer') {
-      return getMoves(gameBoard, x, y, opposingPlayer, 'top', player, jumpsOnly);
-    } else if (player === 'blackPlayer') {
-      return getMoves(gameBoard, x, y, opposingPlayer, 'bottom', player, jumpsOnly);
-    } else if (player.includes('Queen')) {
-      const topMoves = getMoves(gameBoard, x, y, opposingPlayer, 'top', player, jumpsOnly);
-      const bottomMoves = getMoves(gameBoard, x, y, opposingPlayer, 'bottom', player, jumpsOnly);
-      const allMoves = topMoves.concat(bottomMoves);
-      const jumpMoves = allMoves.filter(move => move.isJump === true);
-      if (jumpMoves.length > 0) {
-        return jumpMoves;
-      }
-      return allMoves;
-    }
-
-    return [];
-  }
-
-  function getMoves(gameBoard, x, y, opposingPlayer, direction, player, jumpsOnly) {
-    const moves = [];
-    const jumpMoves = [];
-    const newY = direction === 'top' ? y - 1 : y + 1;
-    const newYJump = direction === 'top' ? y - 2 : y + 2;
-    const possibleXs = getPossibleXs(x);
-    const possibleJumpXs = getPossibleJumpXs(x);
-    possibleXs.forEach(numX => {
-      if (gameBoard[newY] && gameBoard[newY][numX] === null && !jumpsOnly) {
-        moves.push(
-          {
-            x: numX,
-            y: newY,
-            currentPos: { x, y },
-            changes: {
-              [y]: {
-                [x]: null
-              },
-              [newY]: {
-                [numX]: getCheckerStatus(newY, player)
-              }
-            }
-          }
-        );
-      } else if (numX < 8 && numX > 1 && gameBoard[newY] && gameBoard[newY][numX]?.startsWith(opposingPlayer)) {
-        const jumpX = getClosestNumFromArr(numX, possibleJumpXs);
-        if (gameBoard[newYJump] && gameBoard[newYJump][jumpX] === null) {
-          jumpMoves.push(
-            {
-              x: jumpX,
-              y: newYJump,
-              currentPos: { x, y },
-              changes: {
-                [y]: {
-                  [x]: null
-                },
-                [newYJump]: {
-                  [jumpX]: getCheckerStatus(newYJump, player)
-                },
-                [newY]: {
-                  [numX]: null
-                }
-              },
-              isJump: true,
-            }
-          );
-        }
-      }
-    });
-
-    /** If a jump is possible a player has to take it */
-    if (jumpMoves.length > 0) {
-      return jumpMoves;
-    }
-
-    return moves;
-  }
-
   // validate player from cookies
   // validate the player turn
   app.post('/game/tileClick', async (req, res) => {
@@ -389,15 +262,13 @@ mongodb.then(mongo => {
               }
               const mandatoryJumpMoves = getMandatoryJumpCheckers(game.gameBoard, game.playerTurn);
               game.set('mandatoryJumpMoves', mandatoryJumpMoves);
-              io.emit(`game board updated`, getGameProps(game));
-              console.log('should emit');
               await game.save();
+              io.emit(`game board updated`, getGameProps(game));
             } else {
               game.set('activeCheckerPossibleMoves', moreMoves);
               game.set('activeChecker', { x: move.x, y: move.y });
-              io.emit(`game board updated`, getGameProps(game));
-              console.log('should emit');
               await game.save();
+              io.emit(`game board updated`, getGameProps(game));
             }
           }
         } else if (game.mandatoryJumpMoves.length === 0 || (game.mandatoryJumpMoves.length > 0 && isMandatoryJump({ x, y }, game.mandatoryJumpMoves))) {
@@ -406,13 +277,19 @@ mongodb.then(mongo => {
               if (moves.length > 0) {
                 game.set('activeChecker', { x, y });
                 game.set('activeCheckerPossibleMoves', moves);
-                io.emit(`game board updated`, getGameProps(game));
-                console.log('should emit');
                 await game.save();
+                io.emit(`game board updated`, getGameProps(game));
               }
             }
           }
-      }
+
+          const winner = determineWinner(game.gameBoard);
+          if (winner !== null) {
+            game.set('winner', winner);
+            await game.save();
+            io.emit(`game board updated`, getGameProps(game));
+          }
+        }
       return res.status(200).send({});
     } catch (e) {
       console.error('Unknown server error occurred', e);
