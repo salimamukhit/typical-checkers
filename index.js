@@ -18,6 +18,10 @@ const gameSchema = new mongoose.Schema({
   gameBoard: Object,
   playerTurn: String,
   private: Boolean,
+  mandatoryJumpMoves: Array,
+  activeCheckerPossibleMoves: Array,
+  activeChecker: Object,
+  winner: String,
 });
 
 const Game = mongoose.model('Game', gameSchema);
@@ -29,13 +33,13 @@ const io = new Server(server, {
   },
 });
 
-app.use(cors({ origin: 'http://localhost:3000' }));
+app.use(cors({ origin: 'http://localhost:3000', credentials: true, }));
 app.use(express.json());
 app.use(cookieParser());
 
 mongodb.then(mongo => {
   app.get('/', async (req, res) => {
-    res.send("Welcome to checkers backend");
+    return res.send("Welcome to checkers backend");
   });
   
   app.get('/activeGames', async (req, res) => {
@@ -47,10 +51,10 @@ mongodb.then(mongo => {
           activeGameIds.push(game.gameId);
         }
       });
-      res.status(200).send({ activeGameIds });
+      return res.status(200).send({ activeGameIds });
     } catch (e) {
-      res.status(500).send({ message: 'Unknown server error occurred' });
-      console.error(e);
+      console.error('Unknown server error occurred', e);
+      return res.status(500).send({ message: 'Unknown server error occurred' });
     }
   });
   
@@ -68,24 +72,34 @@ mongodb.then(mongo => {
       if (!private) {
         io.emit('game created', { gameId: game.gameId });
       }
-      res.status(200).send({ gameId: game.gameId });
+      return res.status(200).send({ gameId: game.gameId });
     } catch (e) {
-      res.status(500).send({ message: 'Unknown server error occurred' });
       console.error('Unknown server error occurred', e);
+      return res.status(500).send({ message: 'Unknown server error occurred' });
     }
   });
   
   app.get('/game', async (req, res) => {
     try {
       const { gameId } = req.query;
-      const games = await Game.find({ gameId });
-      if (games.length === 0) {
-        res.status(404).send({ message: 'Game with such id was not found' });
+      const game = (await Game.find({ gameId }))[0];
+      if (!game) {
+        return res.status(404).send({ message: 'Game with such id was not found' });
       }
-      res.send({ gameBoard: games[0].gameBoard });
+      return res.status(200).send(
+        {
+          gameBoard: game.gameBoard,
+          playerTurn: game.playerTurn,
+          whitePlayer: game.whitePlayer ? { username: game.whitePlayer.username } : null,
+          blackPlayer: game.blackPlayer ? { username: game.blackPlayer.username } : null,
+          activeChecker: game.activeChecker,
+          activeCheckerPossibleMoves: game.activeCheckerPossibleMoves,
+          mandatoryJumpMoves: game.mandatoryJumpMoves,
+        }
+      );
     } catch (e) {
-      res.status(500).send({ message: 'Unknown server error occurred' });
       console.error('Unknown server error occurred', e);
+      return res.status(500).send({ message: 'Unknown server error occurred' });
     }
   });
 
@@ -93,33 +107,33 @@ mongodb.then(mongo => {
     try {
       const { gameId, username } = req.body;
       if (!gameId) {
-        res.status(400).send({ message: 'Must provide valid gameId!' });
+        console.log(gameId);
+        return res.status(400).send({ message: 'Must provide valid gameId!' });
       }
-
       const game = (await Game.find({ gameId }))[0];
       if (!game) {
-        res.status(404).send({ message: 'Game with such id was not found' });
+        return res.status(404).send({ message: 'Game with such id was not found' });
       }
 
       const gameIdCookie = req.cookies[`typicalCheckersGameId${gameId}`];
       if (gameIdCookie) {
         if (game.whitePlayer?.token === gameIdCookie) {
-          res.status(200).send({ playerTurn: 'whitePlayer' });
+          return res.status(200).send({ currPlayer: 'whitePlayer' });
         } else if (game.blackPlayer?.token === gameIdCookie) {
-          res.status(200).send({ playerTurn: 'blackPlayer' });
+          return res.status(200).send({ currPlayer: 'blackPlayer' });
         } else {
-          res.status(401).send({ message: 'You are not authorized to join this game' });
+          return res.status(401).send({ message: 'You are not authorized to join this game' });
         }
       }
 
       // if the existing player is not reconnecting and the game is full then it is not possible to connect
       if (game.whitePlayer && game.blackPlayer) {
-        res.status(401).send({ message: 'This game is at full capacity' });
+        return res.status(401).send({ message: 'This game is at full capacity' });
       }
 
       // if the game is not at full capacity, provide the player for the user
       if (!username) {
-        res.status(401).send({ message: 'Must provide a valid username to join a game' });
+        return res.status(401).send({ message: 'Must provide a valid username to join a game' });
       }
       if (!game.whitePlayer) {
         game.set('whitePlayer', { updating: true });
@@ -134,8 +148,9 @@ mongodb.then(mongo => {
           maxAge: 86400000, // Cookie expires in 24 hours
           httpOnly: true, // Cookie is not accessible via JavaScript
           secure: false, // Set to true if using HTTPS
+          sameSite: 'lax',
         });
-        res.status(200).send({ playerTurn: 'whitePlayer' });
+        return res.status(200).send({ currPlayer: 'whitePlayer' });
       } else if (!game.blackPlayer) {
         game.set('blackPlayer', { updating: true });
         await game.save();
@@ -149,12 +164,13 @@ mongodb.then(mongo => {
           maxAge: 86400000, // Cookie expires in 24 hours
           httpOnly: true, // Cookie is not accessible via JavaScript
           secure: false, // Set to true if using HTTPS
+          sameSite: 'lax',
         });
-        res.status(200).send({ playerTurn: 'blackPlayer' });
+        return res.status(200).send({ currPlayer: 'blackPlayer' });
       }
     } catch (e) {
-      res.status(500).send({ message: 'Unknown server error occurred' });
       console.error('Unknown server error occurred', e);
+      return res.status(500).send({ message: 'Unknown server error occurred' });
     }
   });
   
@@ -164,11 +180,11 @@ mongodb.then(mongo => {
     const { gameId } = req.body;
     const game = (await Game.find({ gameId }))[0];
     if (!game) {
-      res.status(401).send({ message: 'Game with such id was not found' });
+      return res.status(401).send({ message: 'Game with such id was not found' });
     }
     const playerToken = req.cookies[`typicalCheckersGameId${gameId}`];
     if (!playerToken) {
-      res.status(401).send({ message: 'You are not authorized to join this game' });
+      return res.status(401).send({ message: 'You are not authorized to join this game' });
     }
     if (playerToken === game.whitePlayer.token && game.playerTurn === 'whitePlayer') {
       // logic
