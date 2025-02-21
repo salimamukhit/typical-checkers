@@ -118,8 +118,10 @@ mongodb.then(mongo => {
       const gameIdCookie = req.cookies[`typicalCheckersGameId${gameId}`];
       if (gameIdCookie) {
         if (game.whitePlayer?.token === gameIdCookie) {
+          io.emit(`player connected ${gameId}`, { username: game.whitePlayer.username, playerTurn: 'whitePlayer' });
           return res.status(200).send({ currPlayer: 'whitePlayer' });
         } else if (game.blackPlayer?.token === gameIdCookie) {
+          io.emit(`player connected ${gameId}`, { username: game.blackPlayer.username, playerTurn: 'blackPlayer' });
           return res.status(200).send({ currPlayer: 'blackPlayer' });
         } else {
           return res.status(401).send({ message: 'You are not authorized to join this game' });
@@ -150,6 +152,7 @@ mongodb.then(mongo => {
           secure: false, // Set to true if using HTTPS
           sameSite: 'lax',
         });
+        io.emit(`player connected ${gameId}`, { username: game.whitePlayer.username, playerTurn: 'whitePlayer' });
         return res.status(200).send({ currPlayer: 'whitePlayer' });
       } else if (!game.blackPlayer) {
         game.set('blackPlayer', { updating: true });
@@ -166,6 +169,7 @@ mongodb.then(mongo => {
           secure: false, // Set to true if using HTTPS
           sameSite: 'lax',
         });
+        io.emit(`player connected ${gameId}`, { username: game.blackPlayer.username, playerTurn: 'blackPlayer' });
         return res.status(200).send({ currPlayer: 'blackPlayer' });
       }
     } catch (e) {
