@@ -133,7 +133,7 @@ mongodb.then(mongo => {
       game.markModified('whitePlayer');
       game.markModified('blackPlayer');
       await game.save();
-      io.emit(`game board updated`, getGameProps(game));
+      io.emit(`game reset`, getGameProps(game));
 
       return res.status(200).send({ ...getGameProps(game) });
     } catch (e) {
