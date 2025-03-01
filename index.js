@@ -33,20 +33,24 @@ const gameSchema = new mongoose.Schema({
 
 const Game = mongoose.model('Game', gameSchema);
 
-const io = new Server(server, {
-  cors: {
-    origin: process.env.ORIGIN_URL,
-    methods: ["GET", "POST"],
-  },
-});
+const io = new Server(server);
 
-app.use(cors({ origin: process.env.ORIGIN_URL, methods: ["GET", "POST"], credentials: true, }));
+app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
 
 mongodb.then(mongo => {
-  app.get('/', async (req, res) => {
-    return res.send("Welcome to checkers backend");
+  app.get('/', (req, res) => {
+    res.sendFile(__dirname + '/index.html');
+  });
+
+  app.get('/gameBoard', async (req, res) => {
+    const { gameId } = req.query;
+    const game = (await Game.find({ gameId }))[0];
+    if (!game) {
+      return res.status(404).send({ message: 'Game with such id was not found' });
+    }
+    res.sendFile(__dirname + '/gameBoard.html');
   });
   
   app.get('/existingGames', async (req, res) => {
@@ -83,60 +87,6 @@ mongodb.then(mongo => {
     }
   });
 
-    // resets all the game properties and switches players
-    app.post('/game/reset', async (req, res) => {
-      const { gameId } = req.body;
-      try {
-        const game = (await Game.find({ gameId }))[0];
-        if (!game) {
-          return res.status(404).send({ message: 'Game with such id was not found' });
-        }
-
-        const gameIdCookie = req.cookies[`typicalCheckersGameId${gameId}`];
-        if (!gameIdCookie || (game.whitePlayer?.token !== gameIdCookie && game.blackPlayer?.token !== gameIdCookie)) {
-          return res.status(401).send({ message: 'You are not authorized to the reset this game' });
-        }
-
-        if (!game.winner) {
-          return res.status(401).send({ message: 'Game without a winner cannot be reset' });
-        }
-
-        game.set('gameBoard', initialBoard);
-        game.markModified('gameBoard');
-        game.set('playerTurn', 'whitePlayer');
-        game.set('mandatoryJumpMoves', []);
-        game.set('activeCheckerPossibleMoves', []);
-        game.set('activeChecker', null);
-        game.set('winner', null);
-
-        const temp = { username: game.whitePlayer.username, token: game.whitePlayer.token };
-        game.set('whitePlayer', { username: game.blackPlayer.username, token: game.blackPlayer.token });
-        game.set('blackPlayer', temp);
-        game.markModified('whitePlayer');
-        game.markModified('blackPlayer');
-        await game.save();
-        io.emit(`game board updated`, getGameProps(game));
-
-        return res.status(200).send({ ...getGameProps(game) });
-      } catch (e) {
-        console.error('Unknown server error occurred', e);
-        return res.status(500).send({ message: 'Unknown server error occurred' });
-      }
-    });
-  
-  function getGameProps(game) {
-    return {
-      gameBoard: game.gameBoard,
-      playerTurn: game.playerTurn,
-      whitePlayer: game.whitePlayer ? { username: game.whitePlayer.username } : null,
-      blackPlayer: game.blackPlayer ? { username: game.blackPlayer.username } : null,
-      activeChecker: game.activeChecker,
-      activeCheckerPossibleMoves: game.activeCheckerPossibleMoves,
-      mandatoryJumpMoves: game.mandatoryJumpMoves,
-      winner: game.winner,
-    };
-  }
-
   app.get('/game', async (req, res) => {
     try {
       const { gameId } = req.query;
@@ -150,6 +100,61 @@ mongodb.then(mongo => {
       return res.status(500).send({ message: 'Unknown server error occurred' });
     }
   });
+
+  // resets all the game properties and switches players
+  app.post('/game/reset', async (req, res) => {
+    const { gameId } = req.body;
+    try {
+      const game = (await Game.find({ gameId }))[0];
+      if (!game) {
+        return res.status(404).send({ message: 'Game with such id was not found' });
+      }
+
+      const gameIdCookie = req.cookies[`typicalCheckersGameId${gameId}`];
+      if (!gameIdCookie || (game.whitePlayer?.token !== gameIdCookie && game.blackPlayer?.token !== gameIdCookie)) {
+        return res.status(401).send({ message: 'You are not authorized to the reset this game' });
+      }
+
+      if (!game.winner) {
+        return res.status(401).send({ message: 'Game without a winner cannot be reset' });
+      }
+
+      game.set('gameBoard', initialBoard);
+      game.markModified('gameBoard');
+      game.set('playerTurn', 'whitePlayer');
+      game.set('mandatoryJumpMoves', []);
+      game.set('activeCheckerPossibleMoves', []);
+      game.set('activeChecker', null);
+      game.set('winner', null);
+
+      const temp = { username: game.whitePlayer.username, token: game.whitePlayer.token };
+      game.set('whitePlayer', { username: game.blackPlayer.username, token: game.blackPlayer.token });
+      game.set('blackPlayer', temp);
+      game.markModified('whitePlayer');
+      game.markModified('blackPlayer');
+      await game.save();
+      io.emit(`game board updated`, getGameProps(game));
+
+      return res.status(200).send({ ...getGameProps(game) });
+    } catch (e) {
+      console.error('Unknown server error occurred', e);
+      return res.status(500).send({ message: 'Unknown server error occurred' });
+    }
+  });
+  
+  function getGameProps(game) {
+    return {
+      gameId: game.gameId,
+      gameBoard: game.gameBoard,
+      playerTurn: game.playerTurn,
+      whitePlayer: game.whitePlayer ? { username: game.whitePlayer.username } : null,
+      blackPlayer: game.blackPlayer ? { username: game.blackPlayer.username } : null,
+      activeChecker: game.activeChecker,
+      activeCheckerPossibleMoves: game.activeCheckerPossibleMoves,
+      mandatoryJumpMoves: game.mandatoryJumpMoves,
+      winner: game.winner,
+    };
+  }
 
   app.post('/game/connectPlayer', async (req, res) => {
     try {
@@ -302,7 +307,7 @@ mongodb.then(mongo => {
   });
 
   async function cleanupStaleGames() {
-    const diff = (new Date()) - 180000;
+    const diff = (new Date()) - 200000;
     const deletedGameIds = await Game.find({ updatedAt: { $lt: diff } }).select('gameId').lean().then(results => {
       return results.map(doc => doc.gameId);
     });
@@ -310,7 +315,7 @@ mongodb.then(mongo => {
     io.emit('games deleted', { deletedGameIds });
   }
   
-  setInterval(cleanupStaleGames, 200000);
+  setInterval(cleanupStaleGames, 180000);
 });
 
 server.listen(3001, '0.0.0.0', () => {

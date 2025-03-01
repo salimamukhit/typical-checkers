@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Typical Checkers Game</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body>
+    <div id="enter-game-dialog" style="display:none">
+      <div class="fixed top-0 left-0 z-index-100" style="background-color: rgba(0, 0, 0, 0.5);width:100vw;height:100vh;">
+        <div id="dialog-backdrop" class="flex flex-row justify-center items-center h-lvh">
+          <div id="dialog-content" class="flex flex-col p-6 gap-2 bg-white">
+            <div class="flex gap-2">
+              <label for="username">Username</label>
+              <input type="text" id="username" name="username" class="border border-black" />
+            </div>
+            <div id="create-game-input" class="flex items-center justify-center pt-2">
+              <input id="private-game-checkbox" name="private-game-checkbox" type="checkbox" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded-sm focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600" />
+              <label for="private-game-checkbox" class="ms-2 text-sm font-medium text-gray-900 dark:text-gray-300">Private game</label>
+            </div>
+            <div id="input-error" class="text-center text-red-600" style="display:none;"></div>
+            <div class="flex justify-center pt-2">
+              <button id="enter-game-button" class="bg-black hover:bg-gray-500 text-white font-bold py-2 px-4 rounded"></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="flex flex-col md:flex-row gap-2 p-2">
+      <div>
+        <div id="new-game-card" class="cursor-pointer items-center justify-center gap-x-4 rounded-xl bg-white p-6 shadow-lg outline outline-black/5">
+          + New Game
+        </div>
+      </div>
+      <div id="existing-game-cards" class="grid grid-cols-2 md:grid-cols-3 gap-4 grow"></div>
+    </div>
+  </body>
+  <script>
+    const socket = io();
+    const newGameCard = document.getElementById("new-game-card");
+    const dialog = document.getElementById("enter-game-dialog");
+    const dialogBackdrop = document.getElementById("dialog-backdrop");
+    const dialogContent = document.getElementById("dialog-content");
+    const enterGameButton = document.getElementById("enter-game-button");
+    const inputError = document.getElementById('input-error');
+    const existingGameCards = document.getElementById('existing-game-cards');
+  
+    let existingGameIds = [];
+    let selectedGameId;
+    let dialogType;
+
+    async function fetchGameIds() {
+      try {
+        const res = await fetch(`/existingGames`);
+        const body = await res.json();
+        if (res.status === 200) {
+          if (existingGameIds.length > 0) {
+            updateExistingGameCards(mergeArrays([...existingGameIds], body.existingGameIds));
+          } else {
+            updateExistingGameCards(body.existingGameIds);
+          }
+        } else {
+          alert(body.message);
+        }
+      } catch (e) {
+        console.error('Unexpected error occurred while fetching', e);
+      }
+    }
+  
+    function mergeArrays(arr1, arr2) {
+      const newArr = [];
+      arr1.forEach(item => {
+        if (!newArr.includes(item)) {
+          newArr.push(item);
+        }
+      });
+
+      arr2.forEach(item => {
+        if (!newArr.includes(item)) {
+          newArr.push(item);
+        }
+      });
+
+      console.log(newArr);
+
+      return newArr;
+    }
+
+    function updateExistingGameCards(newExistingGames) {
+      existingGameIds = newExistingGames;
+
+      while (existingGameCards.firstChild) {
+        existingGameCards.removeChild(existingGameCards.firstChild);
+      }
+
+      newExistingGames.forEach(gameId => {
+        const card = document.createElement('div');
+        card.id = `game-${gameId}`;
+        card.className = 'cursor-pointer items-center justify-center gap-x-4 rounded-xl bg-white p-6 shadow-lg outline outline-black/5';
+        card.textContent = gameId;
+        existingGameCards.append(card);
+      });
+    }
+
+    socket.on('game created', data => {
+      const { gameId } = data;
+      if (existingGameIds.length === 0) {
+        updateExistingGameCards([gameId])
+      } else {
+        updateExistingGameCards(mergeArrays([gameId], [...existingGameIds]))
+      }
+    });
+
+    socket.on('games deleted', data => {
+      const { deletedGameIds } = data;
+      if (deletedGameIds.length > 0) {
+        const newGameIds = [];
+        existingGameIds.forEach(gameId => {
+          if (!deletedGameIds.includes(gameId)) {
+            newGameIds.push(gameId);
+          }
+        });
+        updateExistingGameCards(newGameIds);
+      }
+    });
+
+    function openDialog(buttonName, type) {
+      inputError.textContent = null;
+      inputError.style.display = 'none';
+      dialog.style.display = 'block';
+      enterGameButton.textContent = buttonName;
+      dialogType = type;
+      const usernameInput = document.getElementById('username');
+      const storedUsername = localStorage.getItem('typicalCheckersGameUsername');
+      usernameInput.value = storedUsername;
+      const newGameInput = document.getElementById('create-game-input');
+      if (type === 'newGame') {
+        newGameInput.style.display = 'flex';
+      } else {
+        newGameInput.style.display = 'none';
+      }
+    }
+
+    newGameCard.addEventListener('click', () => {
+      openDialog('Create Game', 'newGame');
+    });
+
+    dialogBackdrop.addEventListener('click', event => {
+      if (event.target.id === event.currentTarget.id) {
+        dialog.style.display = 'none';
+      }
+    });
+
+    existingGameCards.addEventListener('click', event => {
+      const targetId = event.target.id;
+      if (targetId.startsWith('game-')) {
+        const gameId = targetId.replace('game-', '');
+        selectedGameId = gameId;
+        openDialog('Enter Game', 'joinGame');
+      }
+    });
+
+    enterGameButton.addEventListener('click', async () => {
+      const username = document.getElementById('username').value;
+      const inputError = document.getElementById('input-error');
+      if (!username) {
+        inputError.textContent = 'Please put in a valid username';
+        inputError.style.display = 'block';
+        return;
+      } else {
+        localStorage.setItem('typicalCheckersGameUsername', username);
+      }
+
+      if (dialogType === 'newGame') {
+        const privateGameCheckBox = document.getElementById('private-game-checkbox');
+        const privateGame = document.getElementById('private-game-checkbox').checked;
+        const res = await fetch(
+          '/game', 
+          { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ private: privateGame }) }
+        );
+        const body = await res.json();
+
+        if (res.status !== 200) {
+          inputError.textContent = body.message;
+          inputError.style.display = 'block';
+        }
+        window.location.href = `/gameBoard?gameId=${body.gameId}`;
+      } else if (dialogType === 'joinGame') {
+        window.location.href = `/gameBoard?gameId=${selectedGameId}`;
+      }
+    });
+
+    fetchGameIds();
+  </script>
+</html>

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Typical Checkers Game</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body>
+    <div id="save-username-dialog" style="display:none">
+      <div class="fixed top-0 left-0 z-index-100" style="background-color: rgba(0, 0, 0, 0.5);width:100vw;height:100vh;">
+        <div id="dialog-backdrop" class="flex flex-row justify-center items-center h-lvh">
+          <div id="dialog-content" class="flex flex-col p-6 gap-2 bg-white">
+            <div class="flex gap-2">
+              <label for="username">Username</label>
+              <input type="text" id="username" name="username" class="border border-black" />
+            </div>
+            <div id="input-error" class="text-center text-red-600" style="display:none;"></div>
+            <div class="flex justify-center pt-2">
+              <button id="save-username-button" class="bg-black hover:bg-gray-500 text-white font-bold py-2 px-4 rounded">Save</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="flex flex-col md:flex-row justify-center items-center gap-2 h-lvh">
+      <div id="white-player-profile" class="flex flex-col gap-4">
+        <div id="player-username" class="text-center text-xl"></div>
+        <div id="checker-count" class="text-center text-3xl"></div>
+      </div>
+      <div>
+        <div id="player-turn" class="flex justify-center pb-2"></div>
+        <div id="checkers-board" class="flex-col border border-black"></div>
+      </div>
+      <div id="black-player-profile" class="flex flex-col gap-4">
+        <div id="player-username" class="text-center text-xl"></div>
+        <div id="checker-count" class="text-center text-3xl"></div>
+      </div>
+    </div>
+  </body>
+  <script>
+    const socket = io();
+    const url = new URL(window.location.href);
+    const params = new URLSearchParams(url.search);
+    const gameId = params.get('gameId');
+    const checkerCounts = {};
+
+    const checkersBoard = document.getElementById('checkers-board');
+    const saveUsernameButton = document.getElementById('save-username-button');
+    const blackPlayerProfile = document.getElementById('black-player-profile');
+    const whitePlayerProfile = document.getElementById('white-player-profile');
+
+    let username = localStorage.getItem('typicalCheckersGameUsername');
+
+    checkersBoard.addEventListener('click', async event => {
+      const cellId = event.target.id.startsWith('checker') || event.target.id === 'crown' ? event.target.parentNode.id : event.target.id;
+      const [row, y, cell, x] = cellId.split('-');
+      const res = await fetch('/game/tileClick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gameId, x: Number(x), y: Number(y) }),
+        credentials: 'include',
+      });
+    });
+
+    saveUsernameButton.addEventListener('click', async () => {
+      const username = usernameInput.value;
+      if (!username) {
+        inputError.textContent = 'Please put in a valid username';
+        inputError.style.display = 'block';
+        return;
+      } else {
+        await connectPlayer(username);
+        localStorage.setItem('typicalCheckersGameUsername', username);
+        dialog.style.display = 'none';
+      }
+    });
+
+    async function connectPlayer() {
+      const res = await fetch('/game/connectPlayer', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ username, gameId }), credentials: 'include' });
+      const body = await res.json();
+      if (res.status === 200) {
+        currPlayer = body.currPlayer;
+        await initGameBoard();
+      } else {
+        alert(body.message);
+      }
+    }
+
+    async function initGameBoard() {
+      const res = await fetch(`/game?gameId=${gameId}`);
+      const body = await res.json();
+      if (res.status === 200) {
+        renderBoard(body);
+      } else {
+        alert(body.message);
+      }
+    }
+
+    function getCellColor(point) {
+      const { x, y } = point;
+      if (y % 2 === 0) {
+        if (x % 2 === 0) {
+          return "black";
+        }
+        return "white";
+      } else {
+        if (x % 2 === 0) {
+          return "white";
+        }
+        return "black";
+      }
+    }
+
+    function setCellStyle(point, gameProps) {
+      const { x, y } = point;
+      const { gameBoard, playerTurn, whitePlayer, blackPlayer, activeChecker, activeCheckerPossibleMoves, mandatoryJumpMoves } = gameProps;
+
+      const isMandatoryJumpChecker = Boolean(mandatoryJumpMoves.find(entry => Number(entry.x) === Number(x) && Number(entry.y) === Number(y)));
+      const isActiveChecker = activeChecker && Number(activeChecker.x) === Number(x) && Number(activeChecker.y) === Number(y);
+      const isActiveCheckerPossibleMove = Boolean(activeCheckerPossibleMoves.find(entry => Number(entry.x) === Number(x) && Number(entry.y) === Number(y)));
+
+      const cell = document.getElementById(`y-${y}-x-${x}`);
+      if (isActiveCheckerPossibleMove) {
+        cell.style.backgroundColor = 'green';
+      } else {
+        cell.style.backgroundColor = getCellColor({ x: Number(x), y: Number(y) });
+      }
+
+      if (gameBoard[y][x] === null) {
+        while (cell.firstChild) {
+          cell.removeChild(cell.firstChild);
+        }
+      } else {
+        if (cell.children.length === 0) {
+          const checker = document.createElement('div');
+          checker.id = `checker-${y}${x}`;
+          checker.className = 'absolute';
+          checker.style.top = 'calc(50% - ((1vh + 1vw) / 2) * 2)';
+          checker.style.left = 'calc(50% - ((1vh + 1vw) / 2) * 2)';
+          checker.style.height = 'calc(((1vh + 1vw) / 2) * 4)';
+          checker.style.width = 'calc(((1vh + 1vw) / 2) * 4)';
+          checker.style.borderRadius = '50%';
+          checker.style.backgroundColor = isActiveChecker ? 'green' : gameBoard[y][x].startsWith('white') ? 'white' : 'black';
+          checker.style.border = isMandatoryJumpChecker ? 'solid 3px green' : 'solid 1px white';
+          cell.append(checker);
+          if (gameBoard[y][x].includes('Queen')) {
+            const crown = document.createElement('div');
+            crown.id = `crown-${y}${x}`;
+            crown.className = 'absolute';
+            crown.style.width = 'calc(((1vh + 1vw) / 2) * 2)';
+            crown.style.top = '2px';
+            crown.style.left = 'calc(50% - ((1vh + 1vw) / 2))';
+            const crownImg = document.createElement('img');
+            crownImg.src = 'https://png.pngtree.com/png-vector/20221225/ourmid/pngtree-gold-crown-transparent-background-png-image_6536816.png';
+            crownImg.style.width = '100%';
+            crown.append(crownImg);
+            cell.appendChild(crown);
+          }
+        } else {
+          const checker = document.getElementById(`checker-${y}${x}`);
+          checker.style.backgroundColor = isActiveChecker ? 'green' : gameBoard[y][x].startsWith('white') ? 'white' : 'black';
+          checker.style.border = isMandatoryJumpChecker ? 'solid 3px green' : 'solid 1px white';
+        }
+      }
+    }
+
+    function renderPlayerProfile(player, type) {
+      if (type === 'whitePlayer') {
+        if (player && player.username) {
+          whitePlayerProfile.querySelector('#player-username').innerHTML = `<b>${player.username}</b>`;
+        } else {
+          whitePlayerProfile.querySelector('#player-username').textContent = `Waiting for player...`;
+        }
+      } else if (type === 'blackPlayer') {
+        if (player && player.username) {
+          blackPlayerProfile.querySelector('#player-username').innerHTML = `<b>${player.username}</b>`;
+        } else {
+          blackPlayerProfile.querySelector('#player-username').textContent = `Waiting for player...`;
+        }
+      }
+    }
+
+    function getCheckerCounts(gameBoard) {
+      let whitePlayerCounts = 0;
+      let blackPlayerCounts = 0;
+
+      Object.keys(gameBoard).forEach(y => {
+        Object.keys(gameBoard[y]).forEach(x => {
+          if (gameBoard[y][x] && gameBoard[y][x].startsWith('white')) {
+            whitePlayerCounts++;
+          } else if (gameBoard[y][x] && gameBoard[y][x].startsWith('black')) {
+            blackPlayerCounts++;
+          }
+        });
+      });
+
+      return { whitePlayer: whitePlayerCounts, blackPlayer: blackPlayerCounts };
+    }
+
+    function renderBoard(gameProps) {
+      const { gameBoard, playerTurn, whitePlayer, blackPlayer, activeChecker, activeCheckerPossibleMoves, mandatoryJumpMoves } = gameProps;
+      document.getElementById('player-turn').textContent = `Now is ${playerTurn.replace('Player', ' player')} turn`;
+      const boardRange = [1, 2, 3, 4, 5, 6, 7, 8]; // used for rendering a board
+      const checkerCounts = getCheckerCounts(gameBoard);
+
+      // console.log({ whitePlayer, blackPlayer });
+
+      renderPlayerProfile(whitePlayer, 'whitePlayer');
+      renderPlayerProfile(blackPlayer, 'blackPlayer');
+
+      whitePlayerProfile.querySelector('#checker-count').textContent = checkerCounts.whitePlayer;
+      blackPlayerProfile.querySelector('#checker-count').textContent = checkerCounts.blackPlayer;
+
+      if (checkersBoard.children.length === 0) {
+        (currPlayer === 'whitePlayer' ? boardRange : boardRange.reverse()).forEach(y => {
+          const row = document.createElement('div');
+          row.id = `row-${y}`;
+          row.className = 'flex flex-row';
+          boardRange.forEach(x => {
+            const cell = document.createElement('div');
+            cell.id = `y-${y}-x-${x}`;
+            cell.className = 'aspect-square relative';
+            cell.style.backgroundColor = getCellColor({ x, y });
+            cell.style.width = 'calc(((1vh + 1vw) / 2) * 6)';
+            row.append(cell);
+          });
+          checkersBoard.append(row);
+        });
+      }
+
+      Object.entries(gameBoard).forEach(([y, xValue]) => {
+        Object.entries(xValue).forEach(([x, player]) => {
+          setCellStyle({ x, y }, gameProps);
+        });
+      });
+    }
+
+    socket.on('game board updated', gameProps => {
+      if (gameProps.gameId === gameId) {
+        renderBoard(gameProps);
+      }
+    });
+
+    socket.on('player connected', data => {
+      if (gameId === data.gameId) {
+        console.log(data);
+        renderPlayerProfile({ playerTurn: data.playerTurn, username: data.username }, data.playerTurn);
+      }
+    });
+
+    const usernameInput = document.getElementById('username');
+    usernameInput.value = localStorage.getItem('typicalCheckersGameUsername');
+
+    if (!username) {
+      const dialog = document.getElementById('save-username-dialog');
+      dialog.style.display = 'block';
+    } else {
+      connectPlayer();
+    }
+  </script>
+</html>
